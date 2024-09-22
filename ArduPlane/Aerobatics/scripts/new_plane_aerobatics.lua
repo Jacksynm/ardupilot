@@ -255,12 +255,9 @@ AEROM_MIS_ANGLE = bind_add_param('MIS_ANGLE', 33, 0.0)
 --]]
 AEROM_OPTIONS = bind_add_param('OPTIONS', 34, 0.0)
 
-AEROM_JSYN_TEN = bind_add_param('JSYN_TEN', 35, 0)
-AEROM_JSYN_REN = bind_add_param('JSYN_REN', 36, 0)
-AEROM_JSYN_PEN = bind_add_param('JSYN_PEN', 37, 0)
-AEROM_JSYN_YEN = bind_add_param('JSYN_YEN', 38, 0)
-
 local OPTIONS = { ABORT_RTL=(1<<0), MSG_ADD_AT=(1<<1), DUAL_AIRCRAFT=(1<<2) }
+
+AEROM_JSYN_YEN = bind_add_param('JSYN_YEN', 36, 0)
 
 --[[
    return true if an option is set
@@ -979,6 +976,7 @@ function _path_align_center:set_next_extents(extents, start_pos, start_orientati
       -- we are on a forward path
       self.distance = - start_x - next_mid_x
    end
+
    self.distance = math.max(self.distance, 0.01)
 end
 
@@ -2596,7 +2594,7 @@ function do_path()
    -- correct time to bring us back into sync
    path_var.path_t = path_var.path_t + TIME_CORR_P:get() * path_err_t
 
-   -- get the path again with the corrected time`
+   -- get the path again with the corrected time
    local r1
    p1, r1, attrib = rotate_path(path,
                                 constrain(path_var.path_t, 0, 1),
@@ -2671,31 +2669,11 @@ function do_path()
       path_rate_ef_dps:z(0)
    end
 
-
-   local foo_path_rotation
-   p1foo, r1foo, attribfoo = rotate_path(path,
-                                constrain(path_var.path_t, 0, 1),
-                                path_var.initial_ori, path_var.initial_ef_pos)
-   local baa_path_rotation
-   p2baa, r2baa, attribbaa = rotate_path(path,
-                                constrain(path_var.path_t+local_n_dt, 0, 1),
-                                path_var.initial_ori, path_var.initial_ef_pos)
-
-   local tangentfoo_ef = p2baa-p1foo
-
    local path_rate_bf_dps = quat_earth_to_body(ahrs_quat, path_rate_ef_dps)
-   local path_rotation = vectors_to_quat_rotation(makeVector3f(1,0,0), tangentfoo_ef)
-   local path_rotation_yaw = path_rotation:get_euler_yaw()
-   local path_rotation_pitch = path_rotation:get_euler_pitch()
-   local path_rotation_yaw_deg = math.deg(path_rotation_yaw)
-   local path_rotation_pitch_deg = math.deg(path_rotation_pitch)
-
-
-
+   
    -- set the path roll rate
    path_rate_bf_dps:x(math.deg(wrap_pi(r1 - r0)/actual_dt))
    
-
    --[[
       calculate body frame roll rate to achieved the desired roll
       angle relative to the maneuver path
@@ -2723,120 +2701,6 @@ function do_path()
    -- zero any non-roll components
    err_angle_rate_bf_dps:y(0)
    err_angle_rate_bf_dps:z(0)
---__________________________________________________________________________________________________
-
-
-
---_________________________________________________________________________________________________
-   -- JACKSYN AOA AND SSA VARIABLES
-   local airvel = ahrs:get_velocity_NED() -- ahrs:wind_esimate()
-   local V_a = math.sqrt(airvel:x()^2 + airvel:y()^2 + airvel:z()^2)
-   local alpha = math.atan(airvel:z() / airvel:x())
-   local beta = math.asin(airvel:y() / V_a)
-
-   logger.write('AERO', 'alpha,beta', 'ff',
-             alpha,
-             beta)
---_________________________________________________________________________________________________]]--
-
---[[ return roll rate for Jacksyns's project --]]
-   -- Calculate the PD control output THIS IS UNTUNED!
-
-   function jacksyn_roll_rate(desired_roll)
-      local Kp = 7.5  -- Proportional gain
-      local Kd = 0.013  -- Derivative gain
-
-      local actual_roll = ahrs:get_roll()
-      local roll_error = desired_roll - actual_roll
-      local body_rates_dps = ahrs:get_gyro():scale(math.deg(1))
-      local roll_derivative = body_rates_dps:x() 
-      local roll_control = Kp * roll_error - Kd * roll_derivative
-
-      logger.write('PDRC','PHI_d,PHI,RollErr,RollCntr,LRr', 'fffff',
-         desired_roll,
-         actual_roll,
-         roll_error,
-         wrap_180(math.deg(roll_control)),
-         err_angle_rate_bf_dps:x())
-
-      return roll_control
-   end
---__________________________________________________________________________________________________	 	 
-
---[[ return yaw rate for Jacksyns's project --]]
-   -- Calculate the PID control output THIS IS UNTUNED!
-
-yaw_integral = yaw_integral or 0
-previous_time = previous_time or local_n_dt
-previous_yaw_error = previous_yaw_error or 0
-
-function jacksyn_yaw_rate(body_yaw_rate_dps)
-	local Kp = 0.800
-	local Kd = 0.500
-	local Ki = 0.000
-	local Kb = 0.000 
-
-	-- Yaw Derivative
-	local desired_yaw_rate = body_yaw_rate_dps -- Using provided tot_ang_vel_bf_dps
-	local current_yaw_rate = math.deg(ahrs:get_gyro():z())
-
-	-- Calculate yaw rate error
-	local yaw_rate_error = desired_yaw_rate - current_yaw_rate
-
-	-- Get integral of yaw rate
-	local current_yaw = math.deg(ahrs:get_yaw())
-	local yaw_error = path_rotation_yaw_deg - current_yaw
-        
-	-- Wrap the yaw error to the range [-180, 180]
-	if yaw_error > 180 or yaw_error < -180 then
-        yaw_error = 0
-	else yaw_error = yaw_error
-    	end
-
-        -- Compute the integral of the yaw error using the trapezoidal rule
-        yaw_integral = yaw_integral + yaw_error * local_n_dt
-
-
-	-- error in position versus current point on the path
-	local pos_error_ef = current_measured_pos_ef - p1
-
-	local x_position_error = pos_error_ef:x()
-	local y_position_error = pos_error_ef:y()
-	local position_error = math.sqrt(x_position_error^2 + y_position_error^2)
-	
-	-- Calculate the control effort
-	-- local yaw_control = Kp * yaw_errorl + Kd * yaw_rate_error + desired_yaw_rate
-	-- local yaw_control = desired_yaw_rate
-	local yaw_control = Kp * yaw_error + Kd * current_yaw_rate + desired_yaw_rate + Kb * beta + Ki * yaw_integral
-
-	logger.write('PYBC', 'DesYr,Yr,PSI,prPsi,rErr,Yerr,rCtrl,latPosE', 'ffffffff',
-		desired_yaw_rate,
-		current_yaw_rate,
-		current_yaw,
-		path_rotation_yaw_deg,
-		yaw_rate_error,
-		yaw_error,
-		yaw_control,
-		position_error)
-
-	logger.write('JYC', 'YawInt,DesYawRt,YawRt,DesYaw,Yaw,YawRtCtlIn,Kp,Kd,Ki,Kb', 'ffffffffff',
-                yaw_integral,
-		desired_yaw_rate,
-                current_yaw_rate,
-		path_rotation_yaw_deg,
-		current_yaw,
-                yaw_control,
-		Kp,
-		Kd,
-		Ki,
-		Kb)
-
-
-	return yaw_control
-end
-
---[[_________________________________________________________________________________________________--]]
-
 
 --[[
       implement lookahead for path rates
@@ -2873,6 +2737,9 @@ end
    --[[
       total angular rate is sum of path rate, correction rate and roll correction rate
    --]]
+
+   path_rate_bf_dps:z(0)
+
    local tot_ang_vel_bf_dps = path_rate_bf_dps + cor_ang_vel_bf_dps + err_angle_rate_bf_dps + sideslip_rate_bf_dps
 
    --[[
@@ -2910,22 +2777,15 @@ end
    log_pose('POSM', current_measured_pos_ef, ahrs_quat:inverse())
    log_pose('POST', p1, orientation_rel_ef_with_roll_angle)
 
-   logger.write('AETM', 'T,Terr,QCt,Adt,Herr','fffff',
+   local P_err_orth = -tv_unit:y()*pos_error_ef:x() + tv_unit:x()*pos_error_ef:y()
+   local vel_orth = -tv_unit:y()*v:x() + tv_unit:x()*v:y()
+
+   logger.write('AETM', 'T,Terr,QCt,Adt,TAS','fffff',
                 path_var.path_t,
                 path_err_t,
                 q_change_t,
                 actual_dt,
-		(current_measured_pos_ef:xy()-p1:xy()):length())
-
-   logger.write('AERT','Cx,Cy,Cz,Px,Py,Pz,Ex,Tx,Ty,Tz,Perr,Aerr,Yff,Rofs', 'ffffffffffffff',
-                cor_ang_vel_bf_dps:x(), cor_ang_vel_bf_dps:y(), cor_ang_vel_bf_dps:z(),
-                path_rate_bf_dps:x(), path_rate_bf_dps:y(), path_rate_bf_dps:z(),
-                err_angle_rate_bf_dps:x(),
-                tot_ang_vel_bf_dps:x(), tot_ang_vel_bf_dps:y(), tot_ang_vel_bf_dps:z(),
-                pos_error_ef:length(),
-                wrap_180(math.deg(err_angle_rad)),
-                sideslip_rate_bf_dps:z(),
-                rudder_offset_pct)
+		TAS)
 
    --log_pose('POSB', p1, path_var.accumulated_orientation_rel_ef)
 
@@ -2952,39 +2812,75 @@ end
       return false
    end
 
+-- AERODYNAMIC MODEL CONTROLLER 
+   function aeromod_yaw()
+	cor_ang_vel_bf_dps:z(0)
+	path_rate_bf_dps:y(0)
+        -- cor_ang_vel_bf_dps:y(0)
 
---[[Sets vehicle target throttle and body rates after corrections
---]]
-   local body_yaw_rate_dps = tot_ang_vel_bf_dps:z()
-   local body_pitch_rate_dps = tot_ang_vel_bf_dps:y()
-   local body_roll_rate_dps = tot_ang_vel_bf_dps:x()
-   local desired_roll = r1
+	local g = 9.81
+        local roll = ahrs:get_roll()
 
---[[AEROM Parameters used as switches to toggle decoupled controllers
---]]
-   if AEROM_JSYN_TEN:get() > 0 then
-      throttle = jacksyn_throttle(throttle);
-   end
-   
-   if AEROM_JSYN_REN:get() > 0 then
-      body_roll_rate_dps = jacksyn_roll_rate(desired_roll);
-   end
+	-- PD Gain values 
+	local kp = makeVector3f(0, 0.0*TAS, 0.1640*TAS)
+	local kd = makeVector3f(0, 0.0*TAS, 0.25*TAS)
+	local kdd = makeVector3f(0, 1, 0.1*TAS) 
 
-   if AEROM_JSYN_PEN:get() > 0 then
-      body_pitch_rate_dps = jacksyn_pitch_rate(body_pitch_rate_dps);
+	local roll_to_q = makeVector3f(0, math.sin(ahrs:get_roll()), math.cos(ahrs:get_roll()))
+	local roll_to_r = makeVector3f(0, math.sin(ahrs:get_roll()), math.cos(ahrs:get_roll()))
+
+	local pos_e_orth = makeVector3f(0,
+					-tv_unit:y()*pos_error_ef:x() + tv_unit:x()*pos_error_ef:y(),
+					-tv_unit:z()*pos_error_ef:x() + tv_unit:x()*pos_error_ef:z())
+	
+	local v_orth = makeVector3f(	0,
+					-tv_unit:y()*v:x() + tv_unit:x()*v:y(),
+					-tv_unit:z()*v:x() + tv_unit:x()*v:z())
+
+	local acc_bf = makeVector3f(	ahrs:get_accel():x(), ahrs:get_accel():y(), ahrs:get_accel():z())
+
+	local lat_ctl = makeVector3f(	0,
+					0,
+					-(kp:z()*pos_e_orth:y() + kd:z()*v_orth:y() + kdd:z()*acc_bf:y()))
+
+	local bf_lat_ctl =  quat_earth_to_body(ahrs_quat, lat_ctl) -- rotates a control effort from earth frame to body frame
+	-- to do the above method need to comput elevator controller and rudder controller seperate then rotate them seperately and then sum the result 
+	
+	-- construct control vector
+        local tot_ang_vel_bf_dps = bf_lat_ctl + cor_ang_vel_bf_dps + err_angle_rate_bf_dps
+
+        logger.write('AERM','r_lat,q_lat,v_lon,v_lat,p_lon,p_lat,z_a,y_a,cy,py', 'ffffffffff',
+			bf_lat_ctl:z(), bf_lat_ctl:y(),
+			v_orth:z(), v_orth:y(),
+			pos_e_orth:z(), pos_e_orth:y(),
+			acc_bf:z(), acc_bf:y(),
+			cor_ang_vel_bf_dps:y(),
+			path_rate_bf_dps:y())
+
+      return tot_ang_vel_bf_dps
+
    end
 
    if AEROM_JSYN_YEN:get() > 0 then
-      body_yaw_rate_dps = jacksyn_yaw_rate(body_yaw_rate_dps);
+    tot_ang_vel_bf_dps = aeromod_yaw()
    end
 
-   vehicle:set_target_throttle_rate_rpy(throttle, body_roll_rate_dps, body_pitch_rate_dps, body_yaw_rate_dps)
+   -- Log control data
+   logger.write('AERT', 'Cx,Cy,Cz,Px,Py,Pz,Ex,Tx,Ty,Tz,Perr,Aerr,Yff,Rofs', 'ffffffffffffff',
+             cor_ang_vel_bf_dps:x(), cor_ang_vel_bf_dps:y(), cor_ang_vel_bf_dps:z(),
+             path_rate_bf_dps:x(), path_rate_bf_dps:y(), path_rate_bf_dps:z(),
+             err_angle_rate_bf_dps:x(),
+             tot_ang_vel_bf_dps:x(), tot_ang_vel_bf_dps:y(), tot_ang_vel_bf_dps:z(),
+             pos_error_ef:length(),
+             wrap_180(math.deg(err_angle_rad)),
+             sideslip_rate_bf_dps:z(),
+             rudder_offset_pct)
 
-   --[[old body rate target
-   --]]
-   --vehicle:set_target_throttle_rate_rpy(throttle, tot_ang_vel_bf_dps:x(), tot_ang_vel_bf_dps:y(), tot_ang_vel_bf_dps:z())
-
-
+   -- Set target throttle and angular velocity rates, applying the combined yaw rate
+   vehicle:set_target_throttle_rate_rpy(throttle, 
+                                     tot_ang_vel_bf_dps:x(), 
+                                     tot_ang_vel_bf_dps:y(), 
+                                     tot_ang_vel_bf_dps:z())
 
    vehicle:set_rudder_offset(rudder_offset_pct, true)
 

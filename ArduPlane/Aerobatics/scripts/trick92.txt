@@ -1,0 +1,20 @@
+# example airshow showing straight flight with initial attitude error
+
+function flat_turn(length, bank_angle, arg3, arg4)
+   local speed = target_groundspeed()
+   local length = length
+   local radius = 0.1
+   local angle = 15
+   local sign = sgn(0)
+   local bank = 0
+
+   return make_paths("flat_turn", {
+        { path_straight(length), roll_angle_entry_exit(bank) },
+        { path_horizontal_arc(sign*radius, angle, 0), roll_angle_entry_exit(sign*bank)},
+        { path_straight(length), roll_angle_entry_exit(bank) },
+   })
+end
+
+message: flat_turn
+flat_turn 500 0
+
