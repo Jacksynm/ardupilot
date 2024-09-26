@@ -2122,9 +2122,7 @@ end
 function log_pose(logname, pos, quat)
    local loc = ahrs:get_origin():copy()
    loc:offset(pos:x(),pos:y())
-   logger.write(logname, 'Lat,Lon,px,py,pz,q1,q2,q3,q4,r,p,y', 'LLffffffffff',
-                loc:lat(),
-		loc:lng(),
+   logger.write(logname, 'px,py,pz,q1,q2,q3,q4,r,p,y,Lat,Lon', 'ffffffffffLL',
    		pos:x(),
                 pos:y(),
                 pos:z(),
@@ -2134,7 +2132,9 @@ function log_pose(logname, pos, quat)
                 quat:q4(),
                 math.deg(quat:get_euler_roll()),
                 math.deg(quat:get_euler_pitch()),
-                math.deg(quat:get_euler_yaw()))
+                math.deg(quat:get_euler_yaw()),
+		loc:lat(),
+                loc:lng())
 end
 
 --[[
@@ -2810,54 +2810,79 @@ function do_path()
    if isNaN(throttle) or Vec3IsNaN(tot_ang_vel_bf_dps) then
       gcs:send_text(MAV_SEVERITY.EMERGENCY,string.format("Path NaN - aborting"))
       return false
-   end
+end
+
+   local ortho_proj_error = ortho_proj(pos_error_ef, tv_unit)
+   local ortho_vel = ortho_proj(v, tv_unit)
+   local longitudinal_error = ortho_proj_error:z()
+   local longitudinal_vel = ortho_vel:z()
+   local lateral_path = makeVector3f(-tv_unit:y(),tv_unit:x(),0)
+   local lateral_error = ortho_proj_error:dot(lateral_path)             
+   local lateral_vel = ortho_vel:dot(lateral_path) 
+
+   local accel_bf = ahrs:get_accel()
+   local ortho_accel = ortho_proj(accel_bf, tv_unit)
+   local lat_acc = ortho_accel:dot(lateral_path)
+   local lon_acc = ortho_accel:z()
+   -- this may not accuratly handlt the movement of g when pitching and rolling (note g is positive here), a shift from lon to lat is noticable dureing a climb which is not goof for lat control, so maby subtract sin(pitch)*g from lat????  
+
+-- if we want to remove gravity from the accelleration measurments
+   local gravity_bf = makeVector3f( 
+    	g * math.sin(pitch),                     
+    	-g * math.sin(roll) * math.cos(pitch),   
+    	g * math.cos(roll) * math.cos(pitch))    
+
+-- Remove gravity from the measured accelerations
+   local adjusted_accel_bf = makeVector3f(
+    	accel_bf:x() - gravity_bf:x(),   
+     	accel_bf:y() - gravity_bf:y(), 
+        accel_bf:z() - gravity_bf:z()) 
+
+   --[[local pos_e_orth = makeVector3f(0,
+                                   -tv_unit:y()*pos_error_ef:x() + tv_unit:x()*pos_error_ef:y(),
+                                   -tv_unit:z()*pos_error_ef:x() + tv_unit:x()*pos_error_ef:z())
+
+   local v_orth = makeVector3f(    0,
+                                   -tv_unit:y()*v:x() + tv_unit:x()*v:y(),
+                                   -tv_unit:z()*v:x() + tv_unit:x()*v:z())
+
+   local acc_bf = makeVector3f(    ahrs:get_accel():x(), ahrs:get_accel():y(), -ahrs:get_accel():z())
+-- need to model gravity in all axis not just thru the floor
+--]]
 
 -- AERODYNAMIC MODEL CONTROLLER 
    function aeromod_yaw()
-	cor_ang_vel_bf_dps:z(0)
-	path_rate_bf_dps:y(0)
-        -- cor_ang_vel_bf_dps:y(0)
-
-	local g = 9.81
+	local g = -9.81
         local roll = ahrs:get_roll()
-
-	-- PD Gain values 
-	local kp = makeVector3f(0, 0.0*TAS, 0.1640*TAS)
-	local kd = makeVector3f(0, 0.0*TAS, 0.25*TAS)
-	local kdd = makeVector3f(0, 1, 0.1*TAS) 
-
-	local roll_to_q = makeVector3f(0, math.sin(ahrs:get_roll()), math.cos(ahrs:get_roll()))
-	local roll_to_r = makeVector3f(0, math.sin(ahrs:get_roll()), math.cos(ahrs:get_roll()))
-
-	local pos_e_orth = makeVector3f(0,
-					-tv_unit:y()*pos_error_ef:x() + tv_unit:x()*pos_error_ef:y(),
-					-tv_unit:z()*pos_error_ef:x() + tv_unit:x()*pos_error_ef:z())
 	
-	local v_orth = makeVector3f(	0,
-					-tv_unit:y()*v:x() + tv_unit:x()*v:y(),
-					-tv_unit:z()*v:x() + tv_unit:x()*v:z())
+	-- PD Gain values 
+	local kp = makeVector3f(0, 0.25*TAS, 0.18*TAS)
+	local kd = makeVector3f(0, 0.25*TAS, 0.27*TAS)
+	local kdd = makeVector3f(0, 0.0*TAS, 0.0*TAS) 
+-- kdd term needs to be second derivative of the position error so compute it in the same way
 
-	local acc_bf = makeVector3f(	ahrs:get_accel():x(), ahrs:get_accel():y(), ahrs:get_accel():z())
+	local lat_ctl = 		(kp:z()*lateral_error+ kd:z()*lateral_vel)
+	local lon_ctl = 		-(kp:y()*longitudinal_error + kd:y()*longitudinal_vel)
 
-	local lat_ctl = makeVector3f(	0,
-					0,
-					-(kp:z()*pos_e_orth:y() + kd:z()*v_orth:y() + kdd:z()*acc_bf:y()))
+	-- Compute the rudder and elevator control efforts
+        local yaw_rate = lat_ctl * math.cos(roll) - lon_ctl * math.sin(roll)
+        local pitch_rate = lon_ctl * math.cos(roll) + lat_ctl * math.sin(roll)
 
-	local bf_lat_ctl =  quat_earth_to_body(ahrs_quat, lat_ctl) -- rotates a control effort from earth frame to body frame
-	-- to do the above method need to comput elevator controller and rudder controller seperate then rotate them seperately and then sum the result 
+	local roll_ctl = makeVector3f(	err_angle_rate_bf_dps:x() + cor_ang_vel_bf_dps:x() + path_rate_bf_dps:x(),
+					pitch_rate, yaw_rate)
 	
 	-- construct control vector
-        local tot_ang_vel_bf_dps = bf_lat_ctl + cor_ang_vel_bf_dps + err_angle_rate_bf_dps
+        local tot_ang_vel_bf_dps = roll_ctl -- lat_mix + lon_mix
 
-        logger.write('AERM','r_lat,q_lat,v_lon,v_lat,p_lon,p_lat,z_a,y_a,cy,py', 'ffffffffff',
-			bf_lat_ctl:z(), bf_lat_ctl:y(),
-			v_orth:z(), v_orth:y(),
-			pos_e_orth:z(), pos_e_orth:y(),
-			acc_bf:z(), acc_bf:y(),
-			cor_ang_vel_bf_dps:y(),
-			path_rate_bf_dps:y())
 
-      return tot_ang_vel_bf_dps
+	local old_measurment = ortho_proj(pos_error_ef, tv_unit)
+	local bf_e = quat_earth_to_body(ahrs_quat, acc_err_ef) 
+        logger.write('AMOD','Cx,Cy,Cz,lat_e,lon_e,aclt,acln', 'fffffff',
+			roll_ctl:x(),roll_ctl:y(),roll_ctl:z(),
+			lateral_error,longitudinal_error,
+			lat_acc,lon_acc)
+      
+	return tot_ang_vel_bf_dps
 
    end
 
@@ -2865,6 +2890,9 @@ function do_path()
     tot_ang_vel_bf_dps = aeromod_yaw()
    end
 
+   logger.write('AERM','v_lon,v_lat,p_lon,p_lat', 'ffff',
+                        longitudinal_vel, lateral_vel,
+                        longitudinal_error,lateral_error)
    -- Log control data
    logger.write('AERT', 'Cx,Cy,Cz,Px,Py,Pz,Ex,Tx,Ty,Tz,Perr,Aerr,Yff,Rofs', 'ffffffffffffff',
              cor_ang_vel_bf_dps:x(), cor_ang_vel_bf_dps:y(), cor_ang_vel_bf_dps:z(),
