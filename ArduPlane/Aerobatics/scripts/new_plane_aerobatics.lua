@@ -2827,17 +2827,17 @@ end
    -- this may not accuratly handlt the movement of g when pitching and rolling (note g is positive here), a shift from lon to lat is noticable dureing a climb which is not goof for lat control, so maby subtract sin(pitch)*g from lat????  
 
 -- if we want to remove gravity from the accelleration measurments
+--[[
    local gravity_bf = makeVector3f( 
     	g * math.sin(pitch),                     
     	-g * math.sin(roll) * math.cos(pitch),   
     	g * math.cos(roll) * math.cos(pitch))    
 
--- Remove gravity from the measured accelerations
    local adjusted_accel_bf = makeVector3f(
     	accel_bf:x() - gravity_bf:x(),   
      	accel_bf:y() - gravity_bf:y(), 
         accel_bf:z() - gravity_bf:z()) 
-
+	]] --
    --[[local pos_e_orth = makeVector3f(0,
                                    -tv_unit:y()*pos_error_ef:x() + tv_unit:x()*pos_error_ef:y(),
                                    -tv_unit:z()*pos_error_ef:x() + tv_unit:x()*pos_error_ef:z())
